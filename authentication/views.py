@@ -7,9 +7,11 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.mail import send_mail
 from django.conf import settings
 from django.shortcuts import get_object_or_404
+from django.db.models import Q
+from django.utils import timezone
 import logging
 
-from .models import Role, Permission, UserPermission
+from .models import Role, Permission, UserPermission, Task, ActivityLog
 from .serializers import (
     RoleSerializer, 
     PermissionSerializer, 
@@ -17,7 +19,9 @@ from .serializers import (
     UserListSerializer,
     LoginSerializer,
     UserSerializer,
-    VerifyOTPSerializer
+    VerifyOTPSerializer,
+    TaskSerializer,
+    ActivityLogSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -75,14 +79,10 @@ class UserViewSet(viewsets.ModelViewSet):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
         try:
-            # Create user without password, inactive until verified
             user = serializer.save(is_active=False)
-            
-            # Generate OTP
             otp = user.generate_otp()
             
             try:
-                # Send email with OTP to the new user's email
                 email_message = f"""
                 Hello {user.first_name},
 
@@ -209,3 +209,96 @@ class PermissionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminUser]
     queryset = Permission.objects.all()
     serializer_class = PermissionSerializer
+
+class TaskViewSet(viewsets.ModelViewSet):
+    serializer_class = TaskSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'admin':
+            return Task.objects.all()
+        return Task.objects.filter(
+            Q(assigned_to=user) | Q(assigned_by=user)
+        )
+
+    def perform_create(self, serializer):
+        task = serializer.save(assigned_by=self.request.user)
+        ActivityLog.objects.create(
+            user=self.request.user,
+            task=task,
+            action='created_task',
+            details=f"Created task: {task.title}"
+        )
+
+    def perform_update(self, serializer):
+        old_status = self.get_object().status
+        task = serializer.save()
+        if old_status != task.status:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                task=task,
+                action='updated_task_status',
+                details=f"Changed status from {old_status} to {task.status}"
+            )
+
+    def perform_destroy(self, instance):
+        ActivityLog.objects.create(
+            user=self.request.user,
+            action='deleted_task',
+            details=f"Deleted task: {instance.title}"
+        )
+        instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def update_status(self, request, pk=None):
+        task = self.get_object()
+        status_val = request.data.get('status')
+        
+        if status_val not in dict(Task.STATUS_CHOICES):
+            return Response(
+                {'error': 'Invalid status'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        old_status = task.status
+        task.status = status_val
+        task.save()
+        
+        ActivityLog.objects.create(
+            user=request.user,
+            task=task,
+            action='updated_task_status',
+            details=f"Changed status from {old_status} to {status_val}"
+        )
+        
+        return Response(TaskSerializer(task).data)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        tasks = self.get_queryset()
+        return Response({
+            'total': tasks.count(),
+            'pending': tasks.filter(status='pending').count(),
+            'in_progress': tasks.filter(status='in_progress').count(),
+            'completed': tasks.filter(status='completed').count(),
+            'high_priority': tasks.filter(priority='high').count(),
+            'medium_priority': tasks.filter(priority='medium').count(),
+            'low_priority': tasks.filter(priority='low').count(),
+            'overdue': tasks.filter(
+                status__in=['pending', 'in_progress'],
+                due_date__lt=timezone.now().date()
+            ).count()
+        })
+
+class ActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ActivityLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'admin':
+            return ActivityLog.objects.all()
+        return ActivityLog.objects.filter(
+            Q(user=user) | Q(task__assigned_to=user) | Q(task__assigned_by=user)
+        )

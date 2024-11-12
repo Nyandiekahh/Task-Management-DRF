@@ -70,3 +70,61 @@ class UserPermission(models.Model):
     
     class Meta:
         unique_together = ('user', 'permission_name')
+
+class Task(models.Model):
+    PRIORITY_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+    ]
+
+    title = models.CharField(max_length=200)
+    description = models.TextField()
+    assigned_by = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name='tasks_created'
+    )
+    assigned_to = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name='tasks_assigned'
+    )
+    status = models.CharField(
+        max_length=20, 
+        choices=STATUS_CHOICES, 
+        default='pending'
+    )
+    priority = models.CharField(
+        max_length=20, 
+        choices=PRIORITY_CHOICES, 
+        default='medium'
+    )
+    due_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
+
+class ActivityLog(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, null=True, blank=True)
+    action = models.CharField(max_length=100)
+    details = models.TextField(null=True, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"{self.user.username} - {self.action} - {self.timestamp}"

@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import validate_email
-from .models import Role, Permission, RolePermission, UserPermission
+from .models import Role, Permission, RolePermission, UserPermission, Task, ActivityLog
 
 User = get_user_model()
 
@@ -131,3 +131,32 @@ class UserListSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
+
+# New serializers for Task functionality
+class TaskSerializer(serializers.ModelSerializer):
+    assigned_by_name = serializers.SerializerMethodField()
+    assigned_to_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Task
+        fields = [
+            'id', 'title', 'description', 'assigned_by', 'assigned_to',
+            'assigned_by_name', 'assigned_to_name', 'status', 'priority',
+            'due_date', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'assigned_by_name', 'assigned_to_name']
+
+    def get_assigned_by_name(self, obj):
+        return f"{obj.assigned_by.first_name} {obj.assigned_by.last_name}"
+
+    def get_assigned_to_name(self, obj):
+        return f"{obj.assigned_to.first_name} {obj.assigned_to.last_name}"
+
+class ActivityLogSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    task = TaskSerializer(read_only=True)
+
+    class Meta:
+        model = ActivityLog
+        fields = ['id', 'user', 'task', 'action', 'details', 'timestamp']
+        read_only_fields = ['timestamp']
